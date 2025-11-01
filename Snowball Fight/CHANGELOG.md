@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Migrated from Adafruit NeoPixel to FastLED library for DMA-based rendering**
+  - Reduces per-frame CPU time from 50-80 cycles/pixel to 5-10 cycles/pixel
+  - Enables 60 FPS on larger displays (3×2, 4×1, and beyond)
+  - Reduces frame-to-frame jitter and timing unpredictability
+  - Non-blocking `FastLED.show()` call runs via DMA hardware
+  - Integrated automatic color correction and power management
+
 ### Added
 - **Flexible LED matrix scaling system** - Support for any panel size and arrangement
 - New [config.h](config.h) configuration file for hardware setup

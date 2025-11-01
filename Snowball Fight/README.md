@@ -124,8 +124,7 @@ Install via Arduino Library Manager:
 Or add to `platformio.ini`:
 ```ini
 lib_deps =
-    adafruit/Adafruit NeoPixel
-    adafruit/Adafruit NeoMatrix
+    fastled/FastLED
     jrowberg/MPU6050
 ```
 

@@ -1,7 +1,6 @@
 #include <Wire.h>
 #include <MPU6050.h>  // Accelerometer library
-#include <Adafruit_NeoMatrix.h>
-#include <Adafruit_NeoPixel.h>
+#include <FastLED.h>  // DMA-based LED control
 #include "version.h"
 #include "config.h"
 
@@ -14,19 +13,18 @@
 #define ENCODER_P2_DT 33
 
 // ===== DISPLAY SETUP =====
-// Dynamic NeoMatrix - configured via config.h
-Adafruit_NeoMatrix matrix = Adafruit_NeoMatrix(
-  GAME_WIDTH, GAME_HEIGHT, MATRIX_PIN,
-  MATRIX_CONFIG,
-  NEO_GRB + NEO_KHZ800
-);
+// FastLED - DMA-based NeoPixel control
+#define NUM_LEDS (GAME_WIDTH * GAME_HEIGHT)
+CRGB leds[NUM_LEDS];
 
 // ===== COLOR DEFINITIONS =====
-#define COLOR_P1 matrix.Color(0, 100, 255)     // Blue
-#define COLOR_P2 matrix.Color(255, 100, 0)     // Orange
-#define COLOR_SNOW matrix.Color(200, 200, 200) // Light gray
-#define COLOR_TERRAIN matrix.Color(100, 100, 100) // Dark gray
-#define COLOR_BG matrix.Color(10, 10, 30)      // Dark blue background
+// FastLED uses CRGB format
+#define COLOR_P1 CRGB(0, 100, 255)       // Blue
+#define COLOR_P2 CRGB(255, 100, 0)       // Orange
+#define COLOR_SNOW CRGB(200, 200, 200)   // Light gray
+#define COLOR_TERRAIN CRGB(100, 100, 100) // Dark gray
+#define COLOR_BG CRGB(10, 10, 30)         // Dark blue background
+#define COLOR_PLANET CRGB(255, 255, 100)  // Yellow planet indicator
 
 // ===== GAME CONSTANTS (Dynamic based on display size) =====
 // Player starting positions - adjust based on game width
@@ -45,15 +43,15 @@ enum Planet {
 struct PlanetData {
   const char* name;
   float gravity;      // pixels/frame^2
-  uint32_t color;     // Background color
+  CRGB color;         // Background color
 };
 
 const PlanetData planets[5] = {
-  {"Earth",   GRAVITY_EARTH,       matrix.Color(10, 10, 30)},      // Dark blue - normal gameplay
-  {"Moon",    GRAVITY_EARTH * 0.17f, matrix.Color(50, 50, 50)},      // Gray - very floaty
-  {"Mars",    GRAVITY_EARTH * 0.4f,  matrix.Color(139, 69, 19)},     // Brown - low grav
-  {"Jupiter", GRAVITY_EARTH * 2.5f,  matrix.Color(200, 100, 50)},    // Orange - high gravity
-  {"Mercury", GRAVITY_EARTH * 0.25f, matrix.Color(128, 128, 128)}    // Silver-gray - very floaty
+  {"Earth",   GRAVITY_EARTH,       CRGB(10, 10, 30)},      // Dark blue - normal gameplay
+  {"Moon",    GRAVITY_EARTH * 0.17f, CRGB(50, 50, 50)},      // Gray - very floaty
+  {"Mars",    GRAVITY_EARTH * 0.4f,  CRGB(139, 69, 19)},     // Brown - low grav
+  {"Jupiter", GRAVITY_EARTH * 2.5f,  CRGB(200, 100, 50)},    // Orange - high gravity
+  {"Mercury", GRAVITY_EARTH * 0.25f, CRGB(128, 128, 128)}    // Silver-gray - very floaty
 };
 
 // Global game variables
@@ -91,7 +89,7 @@ struct Particle {
   float x, y;
   float vx, vy;
   int lifetime;      // frames remaining
-  uint32_t color;
+  CRGB color;
   bool active;
 };
 
@@ -158,10 +156,15 @@ void setup() {
   Serial.printf("Build Date: %s\n", BUILD_DATE);
   Serial.println("Starting...");
 
-  // Initialize LED matrix
-  matrix.begin();
-  matrix.fillScreen(COLOR_BG);
-  matrix.show();
+  // Initialize FastLED with DMA
+  FastLED.addLeds<WS2812B, MATRIX_PIN, GRB>(leds, NUM_LEDS)
+    .setCorrection(TypicalLEDStrip);
+  FastLED.setMaxPowerInVolts(5, 60);  // 60A safe power limit
+  FastLED.setBrightness(LED_BRIGHTNESS);
+
+  // Fill with background color
+  fill_solid(leds, NUM_LEDS, COLOR_BG);
+  FastLED.show();
 
   // Initialize I2C for accelerometers
   Wire.begin();
@@ -493,8 +496,8 @@ void updateTerrain() {
 
 // ===== RENDERING =====
 void render() {
-  uint32_t bgColor = getPlanetColor();
-  matrix.fillScreen(bgColor);
+  CRGB bgColor = getPlanetColor();
+  fill_solid(leds, NUM_LEDS, bgColor);
 
   // Apply screen shake offset (jitter for impact effects)
   int shakeX = 0, shakeY = 0;
@@ -523,14 +526,15 @@ void render() {
   // Draw UI (health)
   drawUI();
 
-  matrix.show();
+  // DMA transfer (non-blocking)
+  FastLED.show();
 }
 
 void drawTerrain() {
   for (int x = 0; x < GAME_WIDTH; x++) {
     int height = terrain.heights[x];
     for (int y = GAME_HEIGHT - height; y < GAME_HEIGHT; y++) {
-      matrix.drawPixel(x, y, COLOR_TERRAIN);
+      leds[y * GAME_WIDTH + x] = COLOR_TERRAIN;
     }
   }
 }
@@ -540,13 +544,14 @@ void drawPlayer(Player* player, int shakeX) {
   int displayX = (int)player->x + shakeX;
   int displayY = GAME_HEIGHT - 4;  // Near bottom of screen
 
+  CRGB color = (player == &player1) ? COLOR_P1 : COLOR_P2;
+
   for (int dx = -1; dx <= 1; dx++) {
     for (int dy = -1; dy <= 1; dy++) {
       int x = displayX + dx;
       int y = displayY + dy;
       if (x >= 0 && x < GAME_WIDTH && y >= 0 && y < GAME_HEIGHT) {
-        uint32_t color = (player == &player1) ? COLOR_P1 : COLOR_P2;
-        matrix.drawPixel(x, y, color);
+        leds[y * GAME_WIDTH + x] = color;
       }
     }
   }
@@ -557,11 +562,11 @@ void drawSnowball(Snowball* ball, int shakeX, int shakeY) {
   int y = (int)ball->y + shakeY;
 
   if (x >= 0 && x < GAME_WIDTH && y >= 0 && y < GAME_HEIGHT) {
-    matrix.drawPixel(x, y, COLOR_SNOW);
+    leds[y * GAME_WIDTH + x] = COLOR_SNOW;
     // Draw a 2x2 snowball
-    if (x + 1 < GAME_WIDTH) matrix.drawPixel(x + 1, y, COLOR_SNOW);
-    if (y + 1 < GAME_HEIGHT) matrix.drawPixel(x, y + 1, COLOR_SNOW);
-    if (x + 1 < GAME_WIDTH && y + 1 < GAME_HEIGHT) matrix.drawPixel(x + 1, y + 1, COLOR_SNOW);
+    if (x + 1 < GAME_WIDTH) leds[y * GAME_WIDTH + (x + 1)] = COLOR_SNOW;
+    if (y + 1 < GAME_HEIGHT) leds[(y + 1) * GAME_WIDTH + x] = COLOR_SNOW;
+    if (x + 1 < GAME_WIDTH && y + 1 < GAME_HEIGHT) leds[(y + 1) * GAME_WIDTH + (x + 1)] = COLOR_SNOW;
   }
 }
 
@@ -574,9 +579,9 @@ void drawParticles(int shakeX, int shakeY) {
 
     if (x >= 0 && x < GAME_WIDTH && y >= 0 && y < GAME_HEIGHT) {
       // Fade particles based on remaining lifetime
-      uint32_t color = particles[i].color;
+      CRGB color = particles[i].color;
       // Optional: could dim color as lifetime decreases
-      matrix.drawPixel(x, y, color);
+      leds[y * GAME_WIDTH + x] = color;
     }
   }
 }
@@ -586,20 +591,20 @@ void drawUI() {
   // Player 1 health (left side)
   int health1Bar = map(player1.health, 0, 100, 0, 14);
   for (int x = 0; x < health1Bar; x++) {
-    matrix.drawPixel(x, 0, COLOR_P1);
+    leds[0 * GAME_WIDTH + x] = COLOR_P1;
   }
 
   // Player 2 health (right side)
   int health2Bar = map(player2.health, 0, 100, 0, 14);
   for (int x = 0; x < health2Bar; x++) {
-    matrix.drawPixel(63 - x, 0, COLOR_P2);
+    leds[0 * GAME_WIDTH + (GAME_WIDTH - 1 - x)] = COLOR_P2;
   }
 
   // Draw planet indicator in middle (tiny 2px wide)
-  // Use different brightness to show current planet
-  uint32_t planetColor = matrix.Color(255, 255, 100);  // Yellow
-  matrix.drawPixel(31, 0, planetColor);
-  matrix.drawPixel(32, 0, planetColor);
+  // Use yellow indicator for current planet
+  int midX = GAME_WIDTH / 2;
+  leds[0 * GAME_WIDTH + (midX - 1)] = COLOR_PLANET;
+  leds[0 * GAME_WIDTH + midX] = COLOR_PLANET;
 }
 
 // ===== PLANET MANAGEMENT =====
@@ -623,7 +628,7 @@ void previousPlanet() {
   setPlanet((Planet)prevIndex);
 }
 
-uint32_t getPlanetColor() {
+CRGB getPlanetColor() {
   return planets[currentPlanet].color;
 }
 
